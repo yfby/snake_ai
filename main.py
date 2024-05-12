@@ -130,13 +130,10 @@ def on_press(key):
     except AttributeError:
         pass
 
-    game.update(direction)
-    # game.display()
-
 listener = keyboard.Listener(on_press=on_press)
 listener.start()
 
 while game.alive:
-    time.sleep(0.1)
-    # game.update(direction)
+    time.sleep(0.2)
+    game.update(direction)
     game.display()
