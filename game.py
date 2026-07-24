@@ -1,18 +1,19 @@
-from random import randrange
 from copy import deepcopy
 from enum import Enum
-from typing import List, Tuple
+from random import randrange
+
 
 
 class Direction(Enum):
     """Direction enum to replace magic numbers."""
+
     UP = 1
     DOWN = 2
     LEFT = 3
     RIGHT = 4
 
 
-class Game:
+class Snake:
     """Class representing the Snake game logic and state."""
 
     def __init__(self, x_width: int, y_height: int) -> None:
@@ -23,7 +24,7 @@ class Game:
             y_height: Height of the game grid
         """
         self.dimension = [x_width, y_height]
-        self.snake = [[int(self.dimension[0]/2), int(self.dimension[1]/2), 0]]
+        self.snake = [[int(self.dimension[0] / 2), int(self.dimension[1] / 2), 0]]
         self.direction = Direction.UP
         self.food = self.generate_food()
         self.alive = True
@@ -31,13 +32,13 @@ class Game:
 
     def new_game(self) -> None:
         """Reset the game to its initial state."""
-        self.snake = [[int(self.dimension[0]/2), int(self.dimension[1]/2), 0]]
+        self.snake = [[int(self.dimension[0] / 2), int(self.dimension[1] / 2), 0]]
         self.direction = Direction.UP
         self.food = self.generate_food()
         self.alive = True
         self.score = 0
 
-    def generate_food(self) -> List[int]:
+    def generate_food(self) -> list[int]:
         """Generate food at a random position not occupied by the snake.
 
         Uses an iterative approach to avoid stack overflow with large snakes.
@@ -50,7 +51,6 @@ class Game:
             food_position = [randrange(self.dimension[0]), randrange(self.dimension[1])]
             if tuple(food_position) not in occupied:
                 return food_position
-
 
     def move(self, direction: Direction) -> None:
         """Move the snake in the given direction.
@@ -67,8 +67,8 @@ class Game:
 
         for i in range(len(self.snake)):
             if i != 0:
-                self.snake[i][0] = last_parts[i-1][0]
-                self.snake[i][1] = last_parts[i-1][1]
+                self.snake[i][0] = last_parts[i - 1][0]
+                self.snake[i][1] = last_parts[i - 1][1]
 
             # Move the head (index 0)
             if i == 0:
@@ -102,7 +102,7 @@ class Game:
         """Add a new segment to the end of the snake."""
         self.snake.append(deepcopy(self.snake[-1]))
 
-    def update(self, direction: Direction) -> Tuple[int, int, bool]:
+    def update(self, direction: Direction) -> tuple[int, int, bool]:
         """Update the game state for one tick.
 
         Moves the snake, checks for collisions, handles food consumption, and self-collision.
@@ -121,8 +121,12 @@ class Game:
         self.move(direction)
 
         # Check for wall collisions
-        if (self.snake[0][0] >= self.dimension[0] or self.snake[0][0] < 0 or
-            self.snake[0][1] >= self.dimension[1] or self.snake[0][1] < 0):
+        if (
+            self.snake[0][0] >= self.dimension[0]
+            or self.snake[0][0] < 0
+            or self.snake[0][1] >= self.dimension[1]
+            or self.snake[0][1] < 0
+        ):
             self.alive = False
             reward = -10
 
@@ -142,18 +146,19 @@ class Game:
 
         # Check if snake collided with itself
         for snake_position in range(len(self.snake)):
-            if (self.snake[0][0] == self.snake[snake_position][0] and 
-                self.snake[0][1] == self.snake[snake_position][1] and 
-                snake_position > 1):
+            if (
+                self.snake[0][0] == self.snake[snake_position][0]
+                and self.snake[0][1] == self.snake[snake_position][1]
+                and snake_position > 1
+            ):
                 self.alive = False
                 reward = -10
 
         return reward, self.score, not self.alive
 
-
     def display(self) -> None:
         """Display the current game state in the terminal.
- 
+
         Uses a 2D grid representation for clarity and correctness.
         """
         if not self.alive:
@@ -161,7 +166,9 @@ class Game:
             return
 
         # Create 2D grid
-        grid = [['.' for _ in range(self.dimension[0])] for _ in range(self.dimension[1])]
+        grid = [
+            ["." for _ in range(self.dimension[0])] for _ in range(self.dimension[1])
+        ]
 
         # Place snake segments
         for segment in self.snake:
@@ -177,5 +184,5 @@ class Game:
         # Clear screen and print grid
         print("\n" * 32)
         for row in grid:
-            print(''.join(row))
+            print("".join(row))
         print(f"Score: {self.score}")
