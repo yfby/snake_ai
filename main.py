@@ -1,38 +1,32 @@
-from game import Game
-import time
-from pynput import keyboard
+from game import Direction, Snake
 
-snake_game = Game(4, 4)
 
-direction = 1
-def on_press(key):
-    global direction
-    try:
-        if key == keyboard.Key.up: 
-            direction = 1
-        if key == keyboard.Key.down:
-            direction = 2
-        if key == keyboard.Key.left:
-            direction = 3
-        if key == keyboard.Key.right:
-            direction = 4
-        if key == keyboard.Key.esc:
-            snake_game.new_game()
-    except AttributeError:
-        pass
-    snake_game.update(direction)
-    snake_game.display()
+def main():
+    game = Snake(16, 16)
+    direction = Direction.UP
 
-listener = keyboard.Listener(on_press=on_press)
-listener.start()
+    while game.alive:
+        game.display()
+        key = input("Move (w/a/s/d, q=quit): ").strip().lower()
 
-while True:
-    time.sleep(0.2)
+        if key == "w":
+            direction = Direction.UP
+        elif key == "s":
+            direction = Direction.DOWN
+        elif key == "a":
+            direction = Direction.LEFT
+        elif key == "d":
+            direction = Direction.RIGHT
+        elif key == "q":
+            break
+        else:
+            continue
 
-'''
-direction
-1 up
-2 down
-3 left
-4 right
-'''
+        game.tick(direction)
+
+    game.display()
+    print(f"Final Score: {game.score}")
+
+
+if __name__ == "__main__":
+    main()

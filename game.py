@@ -3,7 +3,6 @@ from enum import Enum
 from random import randrange
 
 
-
 class Direction(Enum):
     """Direction enum to replace magic numbers."""
 
@@ -102,7 +101,9 @@ class Snake:
         """Add a new segment to the end of the snake."""
         self.snake.append(deepcopy(self.snake[-1]))
 
-    def update(self, direction: Direction) -> tuple[int, int, bool]:
+    def tick(
+        self, direction: Direction
+    ) -> tuple[int, int, bool, list[list[int]], list[int], list[int]]:
         """Update the game state for one tick.
 
         Moves the snake, checks for collisions, handles food consumption, and self-collision.
@@ -111,11 +112,18 @@ class Snake:
             direction: Direction enum for the snake to move
 
         Returns:
-            Tuple of (reward, score, game_over)
+            Tuple of (reward, score, game_over, snake_positionm, food_position, game_dimension)
         """
         reward = 0
         if not self.alive:
-            return reward, self.score, not self.alive
+            return (
+                reward,
+                self.score,
+                not self.alive,
+                self.snake,
+                self.food,
+                self.dimension,
+            )
 
         # Move snake
         self.move(direction)
@@ -154,7 +162,7 @@ class Snake:
                 self.alive = False
                 reward = -10
 
-        return reward, self.score, not self.alive
+        return reward, self.score, not self.alive, self.snake, self.food, self.dimension
 
     def display(self) -> None:
         """Display the current game state in the terminal.
