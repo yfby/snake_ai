@@ -1,4 +1,13 @@
+import torch
+
 from game import Direction, Snake
+
+# 1. Check for Nvidia GPU (CUDA)
+if torch.cuda.is_available():
+    print(f"CUDA is available! 🎉")
+    print(f"Total GPU Count: {torch.cuda.device_count()}")
+    print(f"Current Device ID: {torch.cuda.current_device()}")
+    print(f"GPU Name: {torch.cuda.get_device_name(0)}")
 
 
 def main():
