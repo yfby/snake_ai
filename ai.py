@@ -8,21 +8,36 @@ import torch.optim as optim
 from game import Direction, Snake
 
 
-class DQNetwork(nn.Module):
-    """Deep Q-Network that maps game states to Q-values."""
+class DuelingDQN(nn.Module):
+    """Dueling DQN: splits into value stream + advantage stream."""
 
-    def __init__(self, input_size: int, hidden_size: int, output_size: int) -> None:
+    def __init__(
+        self, input_size: int, hidden_size: int, output_size: int, num_layers: int = 3
+    ) -> None:
         super().__init__()
-        self.network = nn.Sequential(
-            nn.Linear(input_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, output_size),
-        )
+        layers: list[nn.Module] = [nn.Linear(input_size, hidden_size), nn.ReLU()]
+        for _ in range(num_layers - 1):
+            layers.extend([nn.Linear(hidden_size, hidden_size), nn.ReLU()])
+        self.feature = nn.Sequential(*layers)
+
+        value_layers: list[nn.Module] = []
+        for _ in range(num_layers - 1):
+            value_layers.extend([nn.Linear(hidden_size, hidden_size), nn.ReLU()])
+        value_layers.append(nn.Linear(hidden_size, 1))
+        self.value_stream = nn.Sequential(*value_layers)
+
+        advantage_layers: list[nn.Module] = []
+        for _ in range(num_layers - 1):
+            advantage_layers.extend([nn.Linear(hidden_size, hidden_size), nn.ReLU()])
+        advantage_layers.append(nn.Linear(hidden_size, output_size))
+        self.advantage_stream = nn.Sequential(*advantage_layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.network(x)
+        features = self.feature(x)
+        value = self.value_stream(features)
+        advantage = self.advantage_stream(features)
+        # Combine: Q(s,a) = V(s) + A(s,a) - mean(A)
+        return value + advantage - advantage.mean(dim=1, keepdim=True)
 
 
 class ReplayMemory:
@@ -75,19 +90,20 @@ ACTION_MAP = [Direction.UP, Direction.DOWN, Direction.LEFT, Direction.RIGHT]
 
 
 class DQNAgent:
-    """DQN Agent with experience replay and target network."""
+    """DQN Agent with experience replay, target network, and Double DQN."""
 
     def __init__(
         self,
         state_size: int,
         hidden_size: int = 512,
+        num_layers: int = 3,
         lr: float = 1e-3,
         gamma: float = 0.99,
         epsilon_start: float = 1.0,
         epsilon_end: float = 0.01,
         epsilon_decay: float = 0.995,
-        memory_size: int = 100000,
-        batch_size: int = 64,
+        memory_size: int = 500000,
+        batch_size: int = 128,
     ) -> None:
         self.gamma = gamma
         self.epsilon = epsilon_start
@@ -97,15 +113,18 @@ class DQNAgent:
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.policy_net = DQNetwork(state_size, hidden_size, ACTION_SIZE).to(
+        self.policy_net = DuelingDQN(state_size, hidden_size, ACTION_SIZE, num_layers).to(
             self.device
         )
-        self.target_net = DQNetwork(state_size, hidden_size, ACTION_SIZE).to(
+        self.target_net = DuelingDQN(state_size, hidden_size, ACTION_SIZE, num_layers).to(
             self.device
         )
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer, mode="min", factor=0.5, patience=50
+        )
         self.loss_fn = nn.SmoothL1Loss()
         self.memory = ReplayMemory(memory_size)
 
@@ -122,7 +141,7 @@ class DQNAgent:
             return q_values.argmax(dim=1).item()
 
     def train_step(self) -> float | None:
-        """Perform one training step using a batch from replay memory."""
+        """Perform one training step using Double DQN."""
         if len(self.memory) < self.batch_size:
             return None
 
@@ -138,7 +157,9 @@ class DQNAgent:
         current_q = self.policy_net(states_t).gather(1, actions_t).squeeze(1)
 
         with torch.no_grad():
-            next_q = self.target_net(next_states_t).max(dim=1)[0]
+            # Double DQN: policy net selects action, target net evaluates it
+            best_actions = self.policy_net(next_states_t).argmax(dim=1, keepdim=True)
+            next_q = self.target_net(next_states_t).gather(1, best_actions).squeeze(1)
             target_q = rewards_t + self.gamma * next_q * (1 - dones_t)
 
         loss = self.loss_fn(current_q, target_q)
@@ -148,6 +169,7 @@ class DQNAgent:
         torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
         self.optimizer.step()
 
+        self.scheduler.step(loss.item())
         return loss.item()
 
     def update_epsilon(self) -> None:
@@ -176,66 +198,116 @@ class DQNAgent:
 
 
 def train(
-    episodes: int = 1000,
+    episodes: int = 5000,
     grid_size: int = 8,
     max_steps: int = 1000,
     target_update: int = 10,
     print_every: int = 50,
     display: bool = False,
+    curriculum: bool = True,
 ) -> DQNAgent:
     """Train the DQN agent on the snake game.
 
     Args:
         display: Show game state live during training (slower but fun to watch).
+        curriculum: Start with small grids and grow over time.
     """
     import os
 
-    state_size = grid_size * grid_size * 2 + 8
-    max_snake_length = grid_size * grid_size
-    agent = DQNAgent(state_size=state_size)
+    # Curriculum: start at 6x6, grow to target grid_size
+    sizes = [6] if curriculum else [grid_size]
+    if curriculum and grid_size > 6:
+        sizes = list(range(6, grid_size + 1, 2))
+        if sizes[-1] != grid_size:
+            sizes.append(grid_size)
+
+    agent: DQNAgent | None = None
     scores: list[int] = []
 
-    for episode in range(1, episodes + 1):
-        game = Snake(grid_size, grid_size)
-        state = get_state(game, max_snake_length)
-        total_reward = 0
+    for stage, current_size in enumerate(sizes):
+        state_size = current_size * current_size * 2 + 8
+        max_snake_length = current_size * current_size
 
-        for _ in range(max_steps):
-            action_idx = agent.select_action(state)
-            action = ACTION_MAP[action_idx]
+        if agent is None:
+            agent = DQNAgent(state_size=state_size)
+        else:
+            # Resize network for new grid: reinitialize with correct input size
+            agent = DQNAgent(state_size=state_size)
+            if scores:
+                print(f"  Resized network for grid {current_size}x{current_size}")
 
-            reward, score, done, _, _, _ = game.tick(action)
-            next_state = get_state(game, max_snake_length) if not done else state
+        episodes_this_stage = episodes // len(sizes) if curriculum else episodes
 
-            agent.memory.push(state, action_idx, reward, next_state, float(done))
-            agent.train_step()
+        for episode in range(1, episodes_this_stage + 1):
+            game = Snake(current_size, current_size)
+            state = get_state(game, max_snake_length)
+            total_reward = 0
+            steps_since_food = 0
+            stall_limit = current_size * current_size
 
-            state = next_state
-            total_reward += reward
+            for _ in range(max_steps):
+                action_idx = agent.select_action(state)
+                action = ACTION_MAP[action_idx]
 
-            if display:
-                os.system("cls" if os.name == "nt" else "clear")
-                game.display()
-                print(f"Episode {episode}/{episodes} | Epsilon: {agent.epsilon:.3f}")
+                reward, score, done, _, _, _ = game.tick(action)
 
-            if done:
-                break
+                # Reward shaping
+                if not done:
+                    steps_since_food += 1
 
-        agent.update_epsilon()
-        scores.append(game.score)
+                    # Survival bonus
+                    reward += 0.1
 
-        if episode % target_update == 0:
-            agent.update_target_network()
+                    # Stall penalty
+                    if steps_since_food >= stall_limit:
+                        reward -= 5.0
 
-        if episode % print_every == 0:
-            avg = sum(scores[-print_every:]) / print_every
-            print(
-                f"Episode {episode:5d} | "
-                f"Avg Score: {avg:.1f} | "
-                f"Epsilon: {agent.epsilon:.3f} | "
-                f"Best: {max(scores)}"
-            )
+                    # Reset stall counter when food is eaten
+                    if game.score > (scores[-1] if scores else 0):
+                        steps_since_food = 0
 
+                next_state = get_state(game, max_snake_length) if not done else state
+
+                agent.memory.push(state, action_idx, reward, next_state, float(done))
+                agent.train_step()
+
+                state = next_state
+                total_reward += reward
+
+                if display:
+                    os.system("cls" if os.name == "nt" else "clear")
+                    game.display()
+                    print(
+                        f"Stage {stage+1}/{len(sizes)} | "
+                        f"Grid {current_size}x{current_size} | "
+                        f"Episode {episode}/{episodes_this_stage} | "
+                        f"Epsilon: {agent.epsilon:.3f}"
+                    )
+
+                if done:
+                    break
+
+            agent.update_epsilon()
+            scores.append(game.score)
+
+            if episode % target_update == 0:
+                agent.update_target_network()
+
+            if episode % print_every == 0:
+                recent = scores[-print_every:]
+                avg = sum(recent) / len(recent)
+                best_grid = max(sizes[: stage + 1])
+                print(
+                    f"[{current_size}x{current_size}] "
+                    f"Ep {episode:5d} | "
+                    f"Avg: {avg:.1f} | "
+                    f"Eps: {agent.epsilon:.3f} | "
+                    f"Best: {max(scores)} | "
+                    f"LR: {agent.optimizer.param_groups[0]['lr']:.6f}"
+                )
+
+    if agent is None:
+        agent = DQNAgent(state_size=grid_size * grid_size * 2 + 8)
     agent.save()
     return agent
 
@@ -267,4 +339,4 @@ if __name__ == "__main__":
     import sys
 
     live = "--live" in sys.argv
-    train(episodes=1000, grid_size=8, display=live)
+    train(episodes=5000, grid_size=8, display=live)
